@@ -1,4 +1,4 @@
-const CACHE_NAME = '2048-ai-pwa-v1';
+const CACHE_NAME = '2048-ai-pwa-v2';
 const APP_SHELL = [
     './',
     './index.html',

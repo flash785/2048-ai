@@ -288,15 +288,12 @@ document.addEventListener('DOMContentLoaded', () => {
             localStorage.setItem('2048-best-score', String(bestScore));
         }
         inputLocked = true;
-        hintButton.disabled = true;
-        undoButton.disabled = true;
         const token = ++animationToken;
         await animateTiles(previousGrid, direction);
         if (token !== animationToken) return false;
 
         const newTileKey = addRandomTile();
         inputLocked = false;
-        hintButton.disabled = autoPlaying;
         updateGrid(newTileKey, result.mergedKeys, result.gain);
 
         if (!reachedTarget && grid.some(row => row.some(value => value >= 2048))) {
@@ -332,20 +329,93 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Expectimax：玩家层选择方向，随机层按 90% 出 2、10% 出 4 计算期望。
     const SEARCH_ABORTED = Symbol('search-aborted');
-    // 固定右下角的蛇形梯度。指数权重能防止搜索在中途随意更换主角落。
-    const SNAKE_RANKS = [
+    // 同时准备四个角、横纵两种走向的蛇形梯度。AI 会先选择最贴合当前棋盘的布局，
+    // 再在整次 Expectimax 搜索中锁定它，既能继承玩家的摆法，也不会在推演途中频繁换角。
+    const BASE_SNAKE_RANKS = [
         [3, 2, 1, 0],
         [4, 5, 6, 7],
         [11, 10, 9, 8],
         [12, 13, 14, 15]
     ];
-    const POSITION_WEIGHTS = SNAKE_RANKS.map(row => row.map(rank => 4 ** rank));
+    const CORNER_NAMES = {
+        'top-left': '左上角',
+        'top-right': '右上角',
+        'bottom-left': '左下角',
+        'bottom-right': '右下角'
+    };
+
+    function transformRanks(source, flipRows, flipColumns, transpose) {
+        const ranks = createEmptyGrid();
+        for (let r = 0; r < GRID_SIZE; r++) {
+            for (let c = 0; c < GRID_SIZE; c++) {
+                let sourceR = flipRows ? GRID_SIZE - 1 - r : r;
+                let sourceC = flipColumns ? GRID_SIZE - 1 - c : c;
+                if (transpose) [sourceR, sourceC] = [sourceC, sourceR];
+                ranks[r][c] = source[sourceR][sourceC];
+            }
+        }
+        return ranks;
+    }
+
+    const SNAKE_PROFILES = [];
+    for (const transpose of [false, true]) {
+        for (const flipRows of [false, true]) {
+            for (const flipColumns of [false, true]) {
+                const ranks = transformRanks(BASE_SNAKE_RANKS, flipRows, flipColumns, transpose);
+                let cornerRow = 0;
+                let cornerColumn = 0;
+                for (let r = 0; r < GRID_SIZE; r++) {
+                    for (let c = 0; c < GRID_SIZE; c++) {
+                        if (ranks[r][c] === GRID_SIZE * GRID_SIZE - 1) {
+                            cornerRow = r;
+                            cornerColumn = c;
+                        }
+                    }
+                }
+                const vertical = cornerRow === 0 ? 'top' : 'bottom';
+                const horizontal = cornerColumn === 0 ? 'left' : 'right';
+                SNAKE_PROFILES.push({
+                    ranks,
+                    weights: ranks.map(row => row.map(rank => 4 ** rank)),
+                    corner: `${vertical}-${horizontal}`,
+                    cornerRow,
+                    cornerColumn
+                });
+            }
+        }
+    }
 
     function log2(value) {
         return value ? Math.log2(value) : 0;
     }
 
-    function evaluateBoard(board) {
+    function getProfileFit(board, profile) {
+        let fit = 0;
+        for (let r = 0; r < GRID_SIZE; r++) {
+            for (let c = 0; c < GRID_SIZE; c++) {
+                if (board[r][c]) fit += board[r][c] * profile.weights[r][c];
+            }
+        }
+        return fit;
+    }
+
+    function chooseSnakeProfile(board) {
+        return SNAKE_PROFILES.reduce((best, profile) => {
+            const fit = getProfileFit(board, profile);
+            return !best || fit > best.fit ? { ...profile, fit } : best;
+        }, null);
+    }
+
+    function getDirectionOrder(profile) {
+        if (!profile) return AI_DIRECTION_ORDER;
+        const verticalTowardCorner = profile.cornerRow === 0 ? 'ArrowUp' : 'ArrowDown';
+        const horizontalTowardCorner = profile.cornerColumn === 0 ? 'ArrowLeft' : 'ArrowRight';
+        const verticalAwayFromCorner = verticalTowardCorner === 'ArrowUp' ? 'ArrowDown' : 'ArrowUp';
+        const horizontalAwayFromCorner = horizontalTowardCorner === 'ArrowLeft' ? 'ArrowRight' : 'ArrowLeft';
+        return [verticalTowardCorner, horizontalTowardCorner, horizontalAwayFromCorner, verticalAwayFromCorner];
+    }
+
+    function evaluateBoard(board, profile) {
         const emptyCount = getEmptyCells(board).length;
         let smoothness = 0;
         let positional = 0;
@@ -354,7 +424,7 @@ document.addEventListener('DOMContentLoaded', () => {
             for (let c = 0; c < GRID_SIZE; c++) {
                 const value = board[r][c];
                 if (!value) continue;
-                positional += value * POSITION_WEIGHTS[r][c];
+                positional += value * profile.weights[r][c];
                 const current = log2(value);
                 if (c + 1 < GRID_SIZE && board[r][c + 1]) {
                     const neighbour = log2(board[r][c + 1]);
@@ -376,12 +446,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function getBestMove(timeLimit = 320) {
         const deadline = performance.now() + timeLimit;
         let bestCompleted = null;
-        const legalMoves = AI_DIRECTION_ORDER
+        const profile = chooseSnakeProfile(grid);
+        const directionOrder = getDirectionOrder(profile);
+        const legalMoves = directionOrder
             .map(direction => ({ direction, result: simulateMove(grid, direction) }))
             .filter(move => move.result.moved);
 
         if (!legalMoves.length) return null;
-        if (legalMoves.length === 1) return { direction: legalMoves[0].direction, depth: 0 };
+        if (legalMoves.length === 1) {
+            return { direction: legalMoves[0].direction, depth: 0, corner: profile.corner };
+        }
 
         for (let depth = 1; depth <= 7; depth++) {
             const cache = new Map();
@@ -389,9 +463,9 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 for (const move of legalMoves) {
                     const value = move.result.gain * 12
-                        + expectChance(move.result.grid, depth - 1, deadline, cache);
+                        + expectChance(move.result.grid, depth - 1, deadline, cache, profile, directionOrder);
                     if (!depthBest || value > depthBest.value) {
-                        depthBest = { direction: move.direction, value, depth };
+                        depthBest = { direction: move.direction, value, depth, corner: profile.corner };
                     }
                 }
             } catch (error) {
@@ -400,31 +474,32 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             bestCompleted = depthBest;
         }
-        return bestCompleted || { direction: legalMoves[0].direction, depth: 0 };
+        return bestCompleted || { direction: legalMoves[0].direction, depth: 0, corner: profile.corner };
     }
 
-    function expectMax(board, depth, deadline, cache) {
+    function expectMax(board, depth, deadline, cache, profile, directionOrder) {
         if (performance.now() >= deadline) throw SEARCH_ABORTED;
-        if (depth <= 0) return evaluateBoard(board);
+        if (depth <= 0) return evaluateBoard(board, profile);
         const key = `M${depth}:${boardKey(board)}`;
         if (cache.has(key)) return cache.get(key);
 
         let best = -Infinity;
-        for (const direction of AI_DIRECTION_ORDER) {
+        for (const direction of directionOrder) {
             const result = simulateMove(board, direction);
             if (!result.moved) continue;
-            const value = result.gain * 12 + expectChance(result.grid, depth - 1, deadline, cache);
+            const value = result.gain * 12
+                + expectChance(result.grid, depth - 1, deadline, cache, profile, directionOrder);
             best = Math.max(best, value);
         }
-        if (best === -Infinity) best = evaluateBoard(board) - 100000;
+        if (best === -Infinity) best = evaluateBoard(board, profile) - 100000;
         cache.set(key, best);
         return best;
     }
 
-    function expectChance(board, depth, deadline, cache) {
+    function expectChance(board, depth, deadline, cache, profile, directionOrder) {
         if (performance.now() >= deadline) throw SEARCH_ABORTED;
         let emptyCells = getEmptyCells(board);
-        if (!emptyCells.length) return expectMax(board, depth, deadline, cache);
+        if (!emptyCells.length) return expectMax(board, depth, deadline, cache, profile, directionOrder);
         const key = `C${depth}:${boardKey(board)}`;
         if (cache.has(key)) return cache.get(key);
 
@@ -441,9 +516,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const cellProbability = 1 / emptyCells.length;
         for (const [r, c] of emptyCells) {
             board[r][c] = 2;
-            expected += cellProbability * 0.9 * expectMax(board, depth, deadline, cache);
+            expected += cellProbability * 0.9
+                * expectMax(board, depth, deadline, cache, profile, directionOrder);
             board[r][c] = 4;
-            expected += cellProbability * 0.1 * expectMax(board, depth, deadline, cache);
+            expected += cellProbability * 0.1
+                * expectMax(board, depth, deadline, cache, profile, directionOrder);
             board[r][c] = 0;
         }
         cache.set(key, expected);
@@ -500,7 +577,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            setHintStatus(`AI 选择 ${DIRECTION_NAMES[bestMove.direction]} · 搜索 ${bestMove.depth} 层`, bestMove.direction);
+            setHintStatus(`AI 选择 ${DIRECTION_NAMES[bestMove.direction]} · 主角落 ${CORNER_NAMES[bestMove.corner]} · 搜索 ${bestMove.depth} 层`, bestMove.direction);
             const moved = await performMove(bestMove.direction);
             if (!moved || !autoPlaying || runToken !== autoRunToken) return;
 
@@ -604,7 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showGameOver();
             return;
         }
-        setHintStatus(`建议 ${DIRECTION_NAMES[bestMove.direction]} · 已向前搜索 ${bestMove.depth} 层`, bestMove.direction);
+        setHintStatus(`建议 ${DIRECTION_NAMES[bestMove.direction]} · 主角落 ${CORNER_NAMES[bestMove.corner]} · 已搜索 ${bestMove.depth} 层`, bestMove.direction);
         await performMove(bestMove.direction);
     }
 
