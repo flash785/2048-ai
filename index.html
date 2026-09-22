@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#f6efe5">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="2048 AI">
+    <title>2048 · 智能提示版</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="container">
+        <header class="heading">
+            <div class="brand">
+                <h1>2048</h1>
+                <p>合并数字，抵达 2048</p>
+            </div>
+            <div class="scores-container" aria-label="分数">
+                <div class="score-card">
+                    <span class="score-label">当前</span>
+                    <strong id="score">0</strong>
+                    <span id="score-addition" aria-hidden="true"></span>
+                </div>
+                <div class="score-card">
+                    <span class="score-label">最佳</span>
+                    <strong id="best-score">0</strong>
+                </div>
+            </div>
+        </header>
+
+        <section class="toolbar" aria-label="游戏操作">
+            <button id="restart-button" class="secondary-button" type="button">重新开始</button>
+            <button id="undo-button" class="secondary-button" type="button">撤回 <span id="undo-count">0/5</span></button>
+            <button id="hint-button" class="primary-button" type="button">
+                <span class="button-icon">✦</span><span id="hint-label">智能提示</span>
+            </button>
+        </section>
+
+        <p id="hint-status" class="hint-status" aria-live="polite">提示会预测随机落子，并搜索后续局面</p>
+
+        <section class="auto-panel" aria-label="AI 自动代打">
+            <div class="auto-info">
+                <span class="auto-badge" aria-hidden="true">AI</span>
+                <div>
+                    <strong>一键代打</strong>
+                    <span id="auto-status" aria-live="polite">选择目标后交给 AI</span>
+                </div>
+            </div>
+            <label class="target-picker">
+                <span>合成目标</span>
+                <select id="auto-target" aria-label="AI 代打目标数字"></select>
+            </label>
+            <button id="auto-button" class="auto-button" type="button">
+                <span class="auto-play-icon" aria-hidden="true">▶</span>
+                <span id="auto-button-label">开始代打</span>
+            </button>
+        </section>
+
+        <div class="game-container">
+            <div class="game-message" role="dialog" aria-modal="true" aria-live="assertive">
+                <div class="message-content">
+                    <p></p>
+                    <span class="message-score"></span>
+                    <button class="retry-button" type="button">再来一局</button>
+                </div>
+            </div>
+            <div class="grid-container" aria-label="2048 游戏棋盘"></div>
+        </div>
+
+        <footer class="game-help">
+            <span><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 键盘操作</span>
+            <span>手机可滑动操作</span>
+            <button id="install-button" class="install-button" type="button" hidden>安装到设备</button>
+        </footer>
+    </main>
+    <script src="script.js"></script>
+</body>
+</html>
