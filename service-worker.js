@@ -1,10 +1,12 @@
-const CACHE_NAME = '2048-ai-pwa-v2';
+const CACHE_NAME = '2048-ai-pwa-v3';
 const APP_SHELL = [
     './',
     './index.html',
     './style.css',
     './script.js',
+    './ai-worker.js',
     './manifest.webmanifest',
+    './assets/default-background.png',
     './icons/icon-192.png',
     './icons/icon-512.png'
 ];

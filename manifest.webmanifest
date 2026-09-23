@@ -2,7 +2,7 @@
   "id": "./",
   "name": "2048 · AI 智能版",
   "short_name": "2048 AI",
-  "description": "支持智能提示、五步撤回和 AI 自动代打的 2048 小游戏。",
+  "description": "支持智能提示、无限撤回、实时概率和 AI 自动代打的 2048 小游戏。",
   "lang": "zh-CN",
   "start_url": "./",
   "scope": "./",

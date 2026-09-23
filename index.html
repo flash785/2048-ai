@@ -14,6 +14,8 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div class="page-backdrop" aria-hidden="true"></div>
+    <div id="particle-layer" class="particle-layer" aria-hidden="true"></div>
     <main class="container">
         <header class="heading">
             <div class="brand">
@@ -30,18 +32,35 @@
                     <span class="score-label">最佳</span>
                     <strong id="best-score">0</strong>
                 </div>
+                <button id="settings-button" class="settings-button" type="button" aria-label="打开设置" title="设置">⚙</button>
             </div>
         </header>
 
         <section class="toolbar" aria-label="游戏操作">
             <button id="restart-button" class="secondary-button" type="button">重新开始</button>
-            <button id="undo-button" class="secondary-button" type="button">撤回 <span id="undo-count">0/5</span></button>
+            <button id="undo-button" class="secondary-button" type="button">撤回 <span id="undo-count">0</span></button>
             <button id="hint-button" class="primary-button" type="button">
                 <span class="button-icon">✦</span><span id="hint-label">智能提示</span>
             </button>
         </section>
 
         <p id="hint-status" class="hint-status" aria-live="polite">提示会预测随机落子，并搜索后续局面</p>
+
+        <section class="game-insights" aria-label="本局统计">
+            <div class="insight-item">
+                <span>有效步数</span>
+                <strong id="move-count">0</strong>
+            </div>
+            <div class="insight-item probability-item">
+                <span id="probability-label">合成 4 的概率</span>
+                <strong id="win-probability">计算中…</strong>
+                <div class="probability-track" aria-hidden="true"><i id="probability-bar"></i></div>
+            </div>
+            <div class="insight-item">
+                <span>2048 里程碑</span>
+                <strong id="milestone-count">尚未达成</strong>
+            </div>
+        </section>
 
         <section class="auto-panel" aria-label="AI 自动代打">
             <div class="auto-info">
@@ -78,6 +97,95 @@
             <button id="install-button" class="install-button" type="button" hidden>安装到设备</button>
         </footer>
     </main>
+
+    <div id="settings-modal" class="settings-modal" hidden>
+        <div class="settings-backdrop" data-close-settings></div>
+        <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <header class="settings-header">
+                <div>
+                    <span class="settings-kicker">个性化</span>
+                    <h2 id="settings-title">游戏设置</h2>
+                </div>
+                <button id="settings-close" class="icon-button" type="button" aria-label="关闭设置">×</button>
+            </header>
+
+            <div class="settings-group">
+                <h3>外观</h3>
+                <label class="setting-row">
+                    <span>主题色</span>
+                    <select id="theme-select">
+                        <option value="warm">暖杏</option>
+                        <option value="ocean">海蓝</option>
+                        <option value="forest">森林</option>
+                        <option value="lavender">薰衣草</option>
+                    </select>
+                </label>
+                <label class="setting-row">
+                    <span>背景</span>
+                    <select id="background-select">
+                        <option value="art">默认插画</option>
+                        <option value="plain">纯色背景</option>
+                        <option value="custom">我的图片</option>
+                    </select>
+                </label>
+                <div class="setting-row upload-row">
+                    <span>自定义图片<small>仅保存在本设备</small></span>
+                    <label class="upload-button" for="background-upload">选择图片</label>
+                    <input id="background-upload" type="file" accept="image/*" hidden>
+                </div>
+                <label class="setting-row switch-row">
+                    <span>里程碑粒子效果</span>
+                    <input id="particles-toggle" type="checkbox" checked>
+                </label>
+            </div>
+
+            <div class="settings-group">
+                <h3>声音</h3>
+                <label class="setting-row switch-row">
+                    <span>合并音效</span>
+                    <input id="sound-toggle" type="checkbox" checked>
+                </label>
+                <label class="setting-slider">
+                    <span>音效音量 <output id="sound-volume-value">45%</output></span>
+                    <input id="sound-volume" type="range" min="0" max="100" value="45">
+                </label>
+                <label class="setting-row switch-row">
+                    <span>背景音乐</span>
+                    <input id="music-toggle" type="checkbox">
+                </label>
+                <label class="setting-slider">
+                    <span>音乐音量 <output id="music-volume-value">22%</output></span>
+                    <input id="music-volume" type="range" min="0" max="100" value="22">
+                </label>
+            </div>
+
+            <div class="settings-group">
+                <h3>游戏与 AI</h3>
+                <label class="setting-row">
+                    <span>滑动速度</span>
+                    <select id="animation-speed-select">
+                        <option value="fast">快速</option>
+                        <option value="normal" selected>标准</option>
+                        <option value="relaxed">舒缓</option>
+                    </select>
+                </label>
+                <label class="setting-row">
+                    <span>AI 代打速度</span>
+                    <select id="auto-speed-select">
+                        <option value="fast">快速</option>
+                        <option value="normal" selected>标准</option>
+                        <option value="relaxed">慢速观察</option>
+                    </select>
+                </label>
+                <label class="setting-row switch-row">
+                    <span>显示实时概率</span>
+                    <input id="probability-toggle" type="checkbox" checked>
+                </label>
+            </div>
+
+            <button id="reset-settings" class="reset-settings" type="button">恢复默认设置</button>
+        </section>
+    </div>
     <script src="script.js"></script>
 </body>
 </html>

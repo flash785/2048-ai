@@ -16,9 +16,32 @@ document.addEventListener('DOMContentLoaded', () => {
     const restartButton = document.getElementById('restart-button');
     const messageContainer = document.querySelector('.game-message');
     const retryButton = document.querySelector('.retry-button');
+    const moveCountDisplay = document.getElementById('move-count');
+    const milestoneCountDisplay = document.getElementById('milestone-count');
+    const probabilityLabel = document.getElementById('probability-label');
+    const winProbability = document.getElementById('win-probability');
+    const probabilityBar = document.getElementById('probability-bar');
+    const gameInsights = document.querySelector('.game-insights');
+    const particleLayer = document.getElementById('particle-layer');
+    const settingsButton = document.getElementById('settings-button');
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsClose = document.getElementById('settings-close');
+    const themeSelect = document.getElementById('theme-select');
+    const backgroundSelect = document.getElementById('background-select');
+    const backgroundUpload = document.getElementById('background-upload');
+    const particlesToggle = document.getElementById('particles-toggle');
+    const soundToggle = document.getElementById('sound-toggle');
+    const soundVolume = document.getElementById('sound-volume');
+    const soundVolumeValue = document.getElementById('sound-volume-value');
+    const musicToggle = document.getElementById('music-toggle');
+    const musicVolume = document.getElementById('music-volume');
+    const musicVolumeValue = document.getElementById('music-volume-value');
+    const animationSpeedSelect = document.getElementById('animation-speed-select');
+    const autoSpeedSelect = document.getElementById('auto-speed-select');
+    const probabilityToggle = document.getElementById('probability-toggle');
+    const resetSettingsButton = document.getElementById('reset-settings');
 
     const GRID_SIZE = 4;
-    const MAX_HISTORY_LENGTH = 5;
     const DIRECTIONS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
     const AI_DIRECTION_ORDER = ['ArrowDown', 'ArrowRight', 'ArrowLeft', 'ArrowUp'];
     const DIRECTION_NAMES = {
@@ -40,6 +63,29 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoRunToken = 0;
     let autoMoveCount = 0;
     let deferredInstallPrompt = null;
+    let moveCount = 0;
+    let milestone2048Move = null;
+    let probabilityRequestId = 0;
+    let probabilityWorker = null;
+    let probabilityInFlight = false;
+    let pendingProbability = null;
+    let audioContext = null;
+    let musicTimer = null;
+    let musicStep = 0;
+
+    const DEFAULT_SETTINGS = {
+        theme: 'warm',
+        background: 'art',
+        particles: true,
+        sound: true,
+        soundVolume: 45,
+        music: false,
+        musicVolume: 22,
+        animationSpeed: 'normal',
+        autoSpeed: 'normal',
+        probability: true
+    };
+    let settings = loadSettings();
 
     function createEmptyGrid() {
         return Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(0));
@@ -47,6 +93,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function cloneGrid(source) {
         return source.map(row => row.slice());
+    }
+
+    function loadSettings() {
+        try {
+            const saved = JSON.parse(localStorage.getItem('2048-settings') || '{}');
+            return { ...DEFAULT_SETTINGS, ...saved };
+        } catch {
+            return { ...DEFAULT_SETTINGS };
+        }
     }
 
     function setupGridCells() {
@@ -63,6 +118,8 @@ document.addEventListener('DOMContentLoaded', () => {
         grid = createEmptyGrid();
         score = 0;
         history = [];
+        moveCount = 0;
+        milestone2048Move = null;
         inputLocked = false;
         reachedTarget = false;
         animationToken++;
@@ -75,6 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshTargetOptions(2048);
         autoStatus.textContent = '选择目标后交给 AI';
         setHintStatus('提示会预测随机落子，并搜索后续局面');
+        requestProbabilityUpdate();
     }
 
     function getEmptyCells(board) {
@@ -149,9 +207,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         scoreDisplay.textContent = score;
         bestScoreDisplay.textContent = bestScore;
-        undoCount.textContent = `${history.length}/${MAX_HISTORY_LENGTH}`;
+        undoCount.textContent = String(history.length);
         undoButton.disabled = history.length === 0 || inputLocked || autoPlaying;
         hintButton.disabled = inputLocked || autoPlaying;
+        moveCountDisplay.textContent = String(moveCount);
+        milestoneCountDisplay.textContent = milestone2048Move ? `第 ${milestone2048Move} 步` : '尚未达成';
 
         if (scoreGain > 0) {
             scoreAddition.textContent = `+${scoreGain}`;
@@ -217,8 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function saveHistory() {
-        history.push({ grid: cloneGrid(grid), score });
-        if (history.length > MAX_HISTORY_LENGTH) history.shift();
+        history.push({ grid: cloneGrid(grid), score, moveCount, milestone2048Move, reachedTarget });
     }
 
     function getMovementLines(direction) {
@@ -271,7 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
             element.classList.add('tile-sliding');
             element.style.transform = `translate(${(toC - fromC) * step}px, ${(toR - fromR) * step}px)`;
         });
-        return new Promise(resolve => setTimeout(resolve, 155));
+        return new Promise(resolve => setTimeout(resolve, getAnimationDuration()));
     }
 
     async function performMove(direction) {
@@ -280,9 +339,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!result.moved) return false;
 
         saveHistory();
+        const previousMax = getMaxTile();
         const previousGrid = cloneGrid(grid);
         grid = result.grid;
         score += result.gain;
+        moveCount++;
         if (score > bestScore) {
             bestScore = score;
             localStorage.setItem('2048-best-score', String(bestScore));
@@ -295,6 +356,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const newTileKey = addRandomTile();
         inputLocked = false;
         updateGrid(newTileKey, result.mergedKeys, result.gain);
+        if (result.gain > 0) playMergeSound(result.gain);
+        celebrateNewMilestones(previousMax, getMaxTile());
 
         if (!reachedTarget && grid.some(row => row.some(value => value >= 2048))) {
             reachedTarget = true;
@@ -302,6 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!autoPlaying) refreshTargetOptions();
         if (isGameOver(grid)) showGameOver();
+        requestProbabilityUpdate();
         return true;
     }
 
@@ -321,10 +385,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const previous = history.pop();
         grid = previous.grid;
         score = previous.score;
+        moveCount = previous.moveCount;
+        milestone2048Move = previous.milestone2048Move;
+        reachedTarget = previous.reachedTarget;
         messageContainer.classList.remove('visible');
         updateGrid();
         refreshTargetOptions();
         setHintStatus('已撤回上一步');
+        requestProbabilityUpdate();
     }
 
     // Expectimax：玩家层选择方向，随机层按 90% 出 2、10% 出 4 计算期望。
@@ -527,6 +595,237 @@ document.addEventListener('DOMContentLoaded', () => {
         return expected;
     }
 
+    function setupProbabilityWorker() {
+        if (!('Worker' in window)) {
+            winProbability.textContent = '设备不支持';
+            return;
+        }
+        probabilityWorker = new Worker('./ai-worker.js');
+        probabilityWorker.addEventListener('message', event => {
+            probabilityInFlight = false;
+            const { id, target, probability } = event.data;
+            if (id === probabilityRequestId && settings.probability) {
+                probabilityLabel.textContent = `合成 ${target} 的概率`;
+                winProbability.textContent = `约 ${probability}%`;
+                probabilityBar.style.width = `${probability}%`;
+            }
+            if (pendingProbability) {
+                const payload = pendingProbability;
+                pendingProbability = null;
+                sendProbabilityRequest(payload);
+            }
+        });
+        probabilityWorker.addEventListener('error', () => {
+            probabilityInFlight = false;
+            winProbability.textContent = '暂不可用';
+        });
+    }
+
+    function sendProbabilityRequest(payload) {
+        if (!probabilityWorker) return;
+        probabilityInFlight = true;
+        probabilityWorker.postMessage(payload);
+    }
+
+    function requestProbabilityUpdate() {
+        gameInsights.classList.toggle('is-hidden', !settings.probability);
+        if (!settings.probability || !probabilityWorker) return;
+        const target = Math.max(4, getMaxTile() * 2);
+        const payload = {
+            id: ++probabilityRequestId,
+            board: cloneGrid(grid),
+            target,
+            rollouts: getMaxTile() >= 1024 ? 72 : 56
+        };
+        probabilityLabel.textContent = `合成 ${target} 的概率`;
+        winProbability.textContent = '推演中…';
+        if (probabilityInFlight) pendingProbability = payload;
+        else sendProbabilityRequest(payload);
+    }
+
+    function ensureAudioContext() {
+        if (!audioContext) {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) return null;
+            audioContext = new AudioContextClass();
+        }
+        if (audioContext.state === 'suspended') audioContext.resume();
+        return audioContext;
+    }
+
+    function playTone(frequency, duration, volume, type = 'sine', delay = 0) {
+        const context = ensureAudioContext();
+        if (!context || volume <= 0) return;
+        const start = context.currentTime + delay;
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, start);
+        gain.gain.setValueAtTime(.0001, start);
+        gain.gain.exponentialRampToValueAtTime(Math.max(.0001, volume), start + .018);
+        gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+        oscillator.connect(gain).connect(context.destination);
+        oscillator.start(start);
+        oscillator.stop(start + duration + .02);
+    }
+
+    function playMergeSound(gainValue) {
+        if (!settings.sound) return;
+        const volume = settings.soundVolume / 100 * .11;
+        const frequency = Math.min(880, 210 + Math.log2(Math.max(4, gainValue)) * 48);
+        playTone(frequency, .11, volume, 'sine');
+        playTone(frequency * 1.5, .09, volume * .42, 'triangle', .025);
+    }
+
+    function playMusicNote() {
+        if (!settings.music) return;
+        const notes = [220, 277.18, 329.63, 277.18, 246.94, 329.63, 369.99, 329.63];
+        const volume = settings.musicVolume / 100 * .035;
+        const note = notes[musicStep++ % notes.length];
+        playTone(note, 1.35, volume, 'sine');
+        playTone(note / 2, 1.5, volume * .45, 'triangle', .05);
+    }
+
+    function startMusic() {
+        stopMusic();
+        if (!settings.music) return;
+        ensureAudioContext();
+        playMusicNote();
+        musicTimer = window.setInterval(playMusicNote, 1450);
+    }
+
+    function stopMusic() {
+        if (musicTimer) window.clearInterval(musicTimer);
+        musicTimer = null;
+    }
+
+    function celebrateNewMilestones(previousMax, currentMax) {
+        for (const milestone of [512, 1024, 2048]) {
+            if (previousMax < milestone && currentMax >= milestone) {
+                if (milestone === 2048 && !milestone2048Move) {
+                    milestone2048Move = moveCount;
+                    milestoneCountDisplay.textContent = `第 ${moveCount} 步`;
+                }
+                if (settings.sound) {
+                    playTone(420 + Math.log2(milestone) * 24, .45, settings.soundVolume / 100 * .12, 'triangle');
+                }
+                launchMilestoneParticles(milestone);
+            }
+        }
+    }
+
+    function launchMilestoneParticles(milestone) {
+        if (!settings.particles || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const boardRect = gridContainer.getBoundingClientRect();
+        const centerX = boardRect.left + boardRect.width / 2;
+        const centerY = boardRect.top + boardRect.height / 2;
+        const colors = milestone >= 2048
+            ? ['#edc53f', '#f8e08a', '#fff7cc', '#e87345']
+            : ['#edc850', '#f4b56f', '#fff1b8', '#9b83b6'];
+        for (let index = 0; index < 34; index++) {
+            const particle = document.createElement('i');
+            const angle = Math.PI * 2 * index / 34 + Math.random() * .22;
+            const distance = 90 + Math.random() * 190;
+            particle.className = 'milestone-particle';
+            particle.style.setProperty('--particle-x', `${centerX}px`);
+            particle.style.setProperty('--particle-y', `${centerY}px`);
+            particle.style.setProperty('--particle-dx', `${Math.cos(angle) * distance}px`);
+            particle.style.setProperty('--particle-dy', `${Math.sin(angle) * distance}px`);
+            particle.style.setProperty('--particle-rotate', `${Math.round(Math.random() * 480 - 240)}deg`);
+            particle.style.setProperty('--particle-size', `${5 + Math.random() * 9}px`);
+            particle.style.setProperty('--particle-color', colors[index % colors.length]);
+            particleLayer.appendChild(particle);
+            window.setTimeout(() => particle.remove(), 1250);
+        }
+        const banner = document.createElement('div');
+        banner.className = 'milestone-banner';
+        banner.textContent = `✨ 合成 ${milestone}`;
+        particleLayer.appendChild(banner);
+        window.setTimeout(() => banner.remove(), 1600);
+    }
+
+    function saveSettings() {
+        localStorage.setItem('2048-settings', JSON.stringify(settings));
+    }
+
+    function syncSettingsControls() {
+        themeSelect.value = settings.theme;
+        backgroundSelect.value = settings.background;
+        particlesToggle.checked = settings.particles;
+        soundToggle.checked = settings.sound;
+        soundVolume.value = settings.soundVolume;
+        soundVolumeValue.textContent = `${settings.soundVolume}%`;
+        musicToggle.checked = settings.music;
+        musicVolume.value = settings.musicVolume;
+        musicVolumeValue.textContent = `${settings.musicVolume}%`;
+        animationSpeedSelect.value = settings.animationSpeed;
+        autoSpeedSelect.value = settings.autoSpeed;
+        probabilityToggle.checked = settings.probability;
+    }
+
+    function applySettings() {
+        document.body.dataset.theme = settings.theme;
+        document.body.dataset.background = settings.background;
+        const customBackground = localStorage.getItem('2048-custom-background');
+        if (customBackground) document.documentElement.style.setProperty('--custom-background', `url('${customBackground}')`);
+        const durations = { fast: 105, normal: 150, relaxed: 230 };
+        document.documentElement.style.setProperty('--slide-duration', `${durations[settings.animationSpeed] || 150}ms`);
+        gameInsights.classList.toggle('is-hidden', !settings.probability);
+        syncSettingsControls();
+    }
+
+    function updateSetting(key, value) {
+        settings[key] = value;
+        saveSettings();
+        applySettings();
+    }
+
+    function openSettings() {
+        settingsModal.hidden = false;
+        document.body.classList.add('settings-open');
+        settingsClose.focus();
+    }
+
+    function closeSettings() {
+        settingsModal.hidden = true;
+        document.body.classList.remove('settings-open');
+        settingsButton.focus();
+    }
+
+    function resizeAndStoreBackground(file) {
+        if (!file || !file.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.addEventListener('load', () => {
+            const image = new Image();
+            image.addEventListener('load', () => {
+                const maxEdge = 1800;
+                const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(image.width * scale));
+                canvas.height = Math.max(1, Math.round(image.height * scale));
+                canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+                try {
+                    const dataUrl = canvas.toDataURL('image/jpeg', .82);
+                    localStorage.setItem('2048-custom-background', dataUrl);
+                    updateSetting('background', 'custom');
+                    setHintStatus('背景图片已保存到当前设备');
+                } catch {
+                    setHintStatus('图片太大，请选择尺寸较小的图片');
+                }
+            });
+            image.src = reader.result;
+        });
+        reader.readAsDataURL(file);
+    }
+
+    function getAnimationDuration() {
+        return { fast: 110, normal: 155, relaxed: 235 }[settings.animationSpeed] || 155;
+    }
+
+    function getAutoDelay() {
+        return { fast: 35, normal: 110, relaxed: 420 }[settings.autoSpeed] || 110;
+    }
+
     function setHintStatus(message, direction = '') {
         hintStatus.textContent = message;
         hintStatus.dataset.direction = direction;
@@ -590,7 +889,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             autoStatus.textContent = `已自动操作 ${autoMoveCount} 步 · 当前最大 ${currentMax}`;
-            await new Promise(resolve => setTimeout(resolve, 110));
+            await new Promise(resolve => setTimeout(resolve, getAutoDelay()));
         }
     }
 
@@ -687,6 +986,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.addEventListener('keydown', event => {
         if (!DIRECTIONS.includes(event.key)) return;
+        if (!settingsModal.hidden) return;
         event.preventDefault();
         if (autoPlaying) return;
         performMove(event.key);
@@ -717,8 +1017,62 @@ document.addEventListener('DOMContentLoaded', () => {
     autoButton.addEventListener('click', toggleAutoPlay);
     restartButton.addEventListener('click', startGame);
     retryButton.addEventListener('click', startGame);
+    settingsButton.addEventListener('click', openSettings);
+    settingsClose.addEventListener('click', closeSettings);
+    settingsModal.querySelector('[data-close-settings]').addEventListener('click', closeSettings);
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !settingsModal.hidden) closeSettings();
+    });
+
+    themeSelect.addEventListener('change', () => updateSetting('theme', themeSelect.value));
+    backgroundSelect.addEventListener('change', () => {
+        updateSetting('background', backgroundSelect.value);
+        if (backgroundSelect.value === 'custom' && !localStorage.getItem('2048-custom-background')) {
+            backgroundUpload.click();
+        }
+    });
+    backgroundUpload.addEventListener('change', () => resizeAndStoreBackground(backgroundUpload.files[0]));
+    particlesToggle.addEventListener('change', () => updateSetting('particles', particlesToggle.checked));
+    soundToggle.addEventListener('change', () => {
+        updateSetting('sound', soundToggle.checked);
+        if (soundToggle.checked) playMergeSound(16);
+    });
+    soundVolume.addEventListener('input', () => {
+        settings.soundVolume = Number(soundVolume.value);
+        soundVolumeValue.textContent = `${settings.soundVolume}%`;
+        saveSettings();
+    });
+    musicToggle.addEventListener('change', () => {
+        updateSetting('music', musicToggle.checked);
+        if (settings.music) startMusic();
+        else stopMusic();
+    });
+    musicVolume.addEventListener('input', () => {
+        settings.musicVolume = Number(musicVolume.value);
+        musicVolumeValue.textContent = `${settings.musicVolume}%`;
+        saveSettings();
+    });
+    animationSpeedSelect.addEventListener('change', () => updateSetting('animationSpeed', animationSpeedSelect.value));
+    autoSpeedSelect.addEventListener('change', () => updateSetting('autoSpeed', autoSpeedSelect.value));
+    probabilityToggle.addEventListener('change', () => {
+        updateSetting('probability', probabilityToggle.checked);
+        requestProbabilityUpdate();
+    });
+    resetSettingsButton.addEventListener('click', () => {
+        settings = { ...DEFAULT_SETTINGS };
+        saveSettings();
+        applySettings();
+        stopMusic();
+        requestProbabilityUpdate();
+        setHintStatus('设置已恢复默认');
+    });
+    document.addEventListener('pointerdown', () => {
+        if (settings.music && !musicTimer) startMusic();
+    }, { once: true });
 
     setupGridCells();
+    applySettings();
+    setupProbabilityWorker();
     setupPwa();
     startGame();
 });
